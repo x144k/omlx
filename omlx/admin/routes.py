@@ -7225,6 +7225,50 @@ def get_usage_history(
         raise HTTPException(status_code=503, detail="Usage history unavailable") from exc
 
 
+@router.get("/api/session/context")
+def get_session_context(is_admin: bool = Depends(require_admin)):
+    """Live per-session context gauge (oMLX discussion #4671).
+
+    Exposes the same numbers the web-admin dashboard computes client-side, so
+    external tools can evaluate a token threshold without scraping the GUI.
+    Read-only, authenticated via the existing admin api_key.
+    """
+    from ..server import _server_state, get_max_context_window
+    from ..server_metrics import get_server_metrics
+
+    snap = get_server_metrics().get_snapshot(scope="session")
+    prompt_tokens = int(snap.get("total_prompt_tokens", 0))
+    completion_tokens = int(snap.get("total_completion_tokens", 0))
+    total_tokens = prompt_tokens + completion_tokens
+    # Current-window = last completed request (prompt+completion). This is what
+    # the dashboard shows, distinct from the cumulative total_tokens above,
+    # which sums across every request and exceeds the ceiling on long sessions
+    # (a prior context-gauge accounting bug).
+    current_total_tokens = int(snap.get("current_total_tokens", 0))
+
+    model_id = None
+    ceiling = get_max_context_window(None)
+    pool = _server_state.engine_pool
+    if pool is not None:
+        loaded = pool.get_loaded_model_ids() or []
+        if loaded:
+            model_id = loaded[0]
+            ceiling = get_max_context_window(model_id) or ceiling
+
+    pct = (
+        round(100.0 * total_tokens / ceiling, 2) if ceiling and ceiling > 0 else 0.0
+    )
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+        "current_total_tokens": current_total_tokens,
+        "context_ceiling": ceiling or 0,
+        "pct_of_ceiling": pct,
+        "model_id": model_id,
+    }
+
+
 @router.get("/api/stats")
 async def get_server_stats(
     model: str = "",

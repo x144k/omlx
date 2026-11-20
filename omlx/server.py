@@ -5177,6 +5177,12 @@ async def create_chat_completion(
                 raise HTTPException(status_code=400, detail=f"Chat template error: {e}")
             raise
         validate_context_window(num_prompt_tokens, request.model)
+        # Track the full conversation length (system prompt + all messages +
+        # every tool result appended so far) so the live context gauge (#4671)
+        # matches the web-admin GUI even for tool-output tokens that land after
+        # the last completed generation -- a per-generation gauge misses them
+        # until the next prompt is rebuilt.
+        get_server_metrics().set_live_prompt(num_prompt_tokens)
 
         # Prepare kwargs
         (
@@ -7241,6 +7247,15 @@ async def stream_chat_completion(
             ),
             generation_duration=gen_duration,
         )
+        # Push this turn's prompt+completion into the live-gauge counters
+        # BEFORE record_request_complete fires, so the frozen _last_* counters
+        # hold this turn's values in the window between generation-complete and
+        # record. This keeps current_total_tokens equal to the web-admin GUI
+        # (prompt + generated-so-far) so the token-threshold gauge fires at the
+        # correct ceiling instead of a stale high-water mark.
+        _lm = get_server_metrics()
+        _lm.set_live_prompt(last_output.prompt_tokens)
+        _lm.set_live_completion(last_output.completion_tokens)
         get_server_metrics().record_request_complete(
             prompt_tokens=last_output.prompt_tokens,
             completion_tokens=last_output.completion_tokens,
@@ -8111,6 +8126,7 @@ async def create_anthropic_message(
             engine, _count_anthropic_prompt, prompt
         )
         validate_context_window(num_prompt_tokens, request.model)
+        get_server_metrics().set_live_prompt(num_prompt_tokens)
 
         if prepared_prompt is not None:
             chat_kwargs["_prepared_prompt"] = prepared_prompt

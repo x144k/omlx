@@ -16521,6 +16521,14 @@ class Scheduler:
 
         gc.collect()
 
+        # Reset the live current-window context gauge (#4671) so it reflects
+        # the rebuilt post-reset conversation instead of a monotonic
+        # pre-reset high-water mark. Cumulative usage is preserved.
+        try:
+            from .server_metrics import get_server_metrics
+            get_server_metrics().reset_live_context()
+        except Exception as e:
+            logger.warning("reset_live_context on deep_reset failed: %s", e)
         logger.info("Deep reset completed - all caches cleared")
 
     def _store_persistence_progress(self):
