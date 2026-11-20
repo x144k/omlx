@@ -145,7 +145,7 @@ def _patch_layers(language: Any) -> None:
                 self.is_linear = False
             return
         is_linear = layer_types[layer_idx] == "linear_attention"
-        # 11-15 fix (0.8.0 port): the source 122B has full-attn through
+        # 0.8.0 port fix: the source 122B has full-attn through
         # the LAST layer (48); the periodic schedule marks it linear.
         # Force only the last layer full-attn so its q/k/v/norms load.
         if layer_idx == len(layer_types) - 1:
