@@ -7269,6 +7269,24 @@ def get_session_context(is_admin: bool = Depends(require_admin)):
     }
 
 
+@router.post("/api/mcp/reload")
+async def reload_mcp_servers(is_admin: bool = Depends(require_admin)):
+    """Runtime reload of MCP server config without restarting inference
+    (oMLX discussion #4672). Only the MCP child processes restart; the model
+    pool and live session are untouched."""
+    from ..server import get_mcp_manager
+
+    manager = get_mcp_manager()
+    if manager is None:
+        raise HTTPException(status_code=503, detail="MCP manager not initialized")
+    try:
+        result = await manager.reload_config()
+    except ValueError as e:
+        # Malformed MCP config -> clean 400, not an unhandled 500 (#4672 hardening).
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"status": "ok", **result}
+
+
 @router.get("/api/stats")
 async def get_server_stats(
     model: str = "",
