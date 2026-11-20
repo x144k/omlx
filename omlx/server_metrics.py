@@ -49,6 +49,14 @@ class ServerMetrics:
         self.total_requests: int = 0
         self.total_prefill_duration: float = 0.0
         self.total_generation_duration: float = 0.0
+        # Current-window counters -- initialised here so get_snapshot() never
+        # hits AttributeError on a fresh server before the first request lands
+        # (a startup health/stats probe can call get_snapshot() first). The old
+        # code set these only in record_request_complete()/clear_metrics().
+        self._last_prompt_tokens: int = 0
+        self._last_completion_tokens: int = 0
+        self._live_prompt_tokens: int = 0
+        self._live_completion_tokens: int = 0
         self._per_model: Dict[str, Dict[str, Any]] = {}
 
         # Preflight rejections — split by reason so operators can tell
@@ -70,6 +78,16 @@ class ServerMetrics:
         self._alltime_prefill_duration: float = 0.0
         self._alltime_generation_duration: float = 0.0
         self._alltime_per_model: Dict[str, Dict[str, Any]] = {}
+
+        # Live current-window prompt tokens: the FULL conversation length (all
+        # messages incl. tool results) as of the latest prompt build, tracked
+        # separately from _last_prompt_tokens (the last *completed generation's*
+        # prompt). The gap between them is this turn's tool-output tokens, which
+        # land after the last generation but before the next prompt is built --
+        # exactly what a per-generation gauge otherwise misses. current_total_tokens
+        # uses the max so the live context gauge matches the GUI (which counts the
+        # full message list), not the frozen last-generation count. See #4671.
+        self._live_prompt_tokens: int = 0
 
         self._start_time = time.time()
         self._last_save_time = time.time()
@@ -178,6 +196,9 @@ class ServerMetrics:
             self.total_completion_tokens += completion_tokens
             self.total_cached_tokens += cached_tokens
             self.total_requests += 1
+            # Current-window (last completed request) tokens.
+            self._last_prompt_tokens = prompt_tokens
+            self._last_completion_tokens = completion_tokens
             self.total_prefill_duration += prefill_duration
             self.total_generation_duration += generation_duration
 
@@ -333,7 +354,7 @@ class ServerMetrics:
                     )
                 return self._build_snapshot(0, 0, 0, 0, 0.0, 0.0, uptime)
 
-            return self._build_snapshot(
+            snap = self._build_snapshot(
                 self.total_prompt_tokens,
                 self.total_completion_tokens,
                 self.total_cached_tokens,
@@ -342,6 +363,13 @@ class ServerMetrics:
                 self.total_generation_duration,
                 uptime,
             )
+            snap["current_prompt_tokens"] = self._last_prompt_tokens
+            snap["current_completion_tokens"] = self._last_completion_tokens
+            snap["current_total_tokens"] = (
+                max(self._last_prompt_tokens, self._live_prompt_tokens)
+                + self._live_completion_tokens
+            )
+            return snap
 
     def clear_metrics(self) -> None:
         """Clear session metrics. Thread-safe."""
@@ -350,9 +378,59 @@ class ServerMetrics:
             self.total_completion_tokens = 0
             self.total_cached_tokens = 0
             self.total_requests = 0
+            # Current-window (last completed request) is the live context gauge
+            # the web-admin dashboard shows, distinct from the cumulative
+            # session totals below, which sum across every request and exceed
+            # the ceiling on long sessions (a prior context-gauge accounting bug).
+            self._last_prompt_tokens = 0
+            self._last_completion_tokens = 0
+            self._live_prompt_tokens = 0
+            self._live_completion_tokens = 0
             self.total_prefill_duration = 0.0
             self.total_generation_duration = 0.0
             self._per_model.clear()
+
+    def reset_live_context(self) -> None:
+        """Reset only the live current-window context counters (NOT the
+        cumulative usage totals). Called on scheduler deep_reset / engine
+        switch so the #4671 live context gauge reflects the rebuilt
+        conversation instead of a monotonic pre-reset high-water mark.
+        Cumulative all-time usage is preserved."""
+        with self._lock:
+            self._last_prompt_tokens = 0
+            self._last_completion_tokens = 0
+            self._live_prompt_tokens = 0
+            self._live_completion_tokens = 0
+
+    def set_live_prompt(self, tokens: int) -> None:
+        """Record the full conversation length at a prompt build.
+
+        num_prompt_tokens is the tokenized length of the *entire* current
+        conversation (system prompt + all messages + every tool result appended
+        so far) -- the same quantity the web-admin GUI renders as context usage.
+        Tracking it here lets the live context gauge (#4671 current_total_tokens)
+        match the GUI even for tool-output tokens that arrive after the last
+        completed generation, which a per-generation prompt/completion gauge
+        would otherwise miss until the next generation's prompt is rebuilt.
+        Thread-safe; monotonic within a session.
+        """
+        with self._lock:
+            if tokens > self._live_prompt_tokens:
+                self._live_prompt_tokens = tokens
+
+    def set_live_completion(self, tokens: int) -> None:
+        """Record the current in-flight generation's completion-token count.
+
+        Paired with set_live_prompt so current_total_tokens reflects the
+        *live* turn (prompt + generated-so-far) -- the same quantity the
+        web-admin GUI renders -- rather than the last *completed* generation.
+        Reading the gauge in the window between a generation finishing and
+        record_request_complete() firing, where the frozen _last_* counters
+        still hold the previous turn, keeps it from under-reporting by this
+        turn's completion tokens. Thread-safe; monotonic within a session."""
+        with self._lock:
+            if tokens > self._live_completion_tokens:
+                self._live_completion_tokens = tokens
 
     def clear_alltime_metrics(self) -> None:
         """Clear all-time metrics and delete the persisted file. Thread-safe."""
