@@ -298,3 +298,45 @@ class MCPClientManager:
             for client in self._clients.values():
                 await client.disconnect()
                 await client.connect()
+
+    async def reload_config(self) -> dict:
+        """Re-read MCP config from disk and (re)connect clients.
+
+        Leaves the inference model pool and live session untouched -- only the
+        MCP server child processes are reloaded (oMLX discussion #4672).
+        """
+        from .config import load_mcp_config
+
+        try:
+            new_config = load_mcp_config()
+        except Exception as e:
+            # Broken/invalid MCP config -> clean domain error, not an unhandled
+            # exception that surfaces as a 500 on POST /admin/api/mcp/reload
+            # (oMLX discussion #4672 hardening).
+            logger.error("MCP config failed to load: %s", e)
+            raise ValueError(f"MCP config invalid: {e}") from e
+        async with self._lock:
+            # Drop servers that were removed from the config.
+            for name in [
+                n for n in list(self._clients) if n not in new_config.servers
+            ]:
+                client = self._clients.pop(name)
+                await client.disconnect()
+                logger.info("MCP reload: removed '%s'", name)
+            # (Re)build clients for every configured server.
+            for name, server_config in new_config.servers.items():
+                existing = self._clients.get(name)
+                if existing is not None:
+                    await existing.disconnect()
+                self._clients[name] = MCPClient(server_config)
+            self._started = True
+            tasks = [c.connect() for c in self._clients.values() if c.config.enabled]
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            connected = sum(1 for c in self._clients.values() if c.is_connected)
+            logger.info(
+                "MCP config reloaded: %d servers, %d connected",
+                len(self._clients),
+                connected,
+            )
+        return {"servers": list(self._clients), "connected": connected}
