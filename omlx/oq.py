@@ -10517,6 +10517,31 @@ def _collect_imatrix_from_model(
 _STREAM_TEXT_LAYER_PREFIX = "language_model.model.layers."
 _STREAM_EMBED_KEY = "language_model.model.embed_tokens.weight"
 
+
+def _streamed_text_namespace(dp: "_DiscoveredPlan") -> str:
+    """Leading key namespace the sanitizer laid text tensors under (e.g.
+    'language_model.model.' or 'model.'), derived from the embed key so the
+    layer prefix and embed key can never diverge for a given checkpoint.
+    Falls back to the first layer key when no embed table is present."""
+    for k in dp:
+        if k.endswith("embed_tokens.weight"):
+            return k[: -len("embed_tokens.weight")]
+    for k in dp:
+        if ".layers." in k:
+            return k.split(".layers.", 1)[0] + "."
+    return ""
+
+
+def _streamed_embed_key(dp: "_DiscoveredPlan") -> str:
+    """Checkpoint key of the token embedding table, whatever namespace the
+    sanitizer laid it under (qwen3.5/VLM:
+    'language_model.model.embed_tokens.weight', Jamba and other mlx_lm-text
+    checkpoints: 'model.embed_tokens.weight')."""
+    for k in dp:
+        if k.endswith("embed_tokens.weight"):
+            return k
+    raise KeyError("no embed_tokens.weight in streamed checkpoint plan")
+
 # Qwen3.5 / 3.6 and their text-only Hugging Face names.
 _QWEN3_5_STREAM_MODEL_TYPES = frozenset(
     {"qwen3_5", "qwen3_5_moe", "qwen3_5_text", "qwen3_5_moe_text"}
@@ -10527,7 +10552,7 @@ _QWEN3_5_STREAM_MODEL_TYPES = frozenset(
 # and an explicit stream_calibration request for one fails fast (see
 # _resolve_stream_calibration). Keep this in lockstep with the sourcer above.
 _STREAM_CALIBRATION_SUPPORTED_MODEL_TYPES = frozenset(
-    {"minimax_m3_vl", "qwen4_exp", "glm5_next", "muse_spark", "flint"}
+    {"minimax_m3_vl", "qwen4_exp", "glm5_next", "muse_spark", "flint", "step3p7", "jamba"}
     | _QWEN3_5_STREAM_MODEL_TYPES
     | set(_HY_V4_MODEL_TYPES)
 )
@@ -10563,6 +10588,18 @@ def _streamed_text_args(model_path, config, *, trust_remote_code: bool = False):
         from omlx.patches.hy_v4.language import DecoderLayer
 
         return ModelConfig.from_dict(config).text_config, DecoderLayer
+    if _stream_source_model_type(config) == "step3p7":
+        # Step3p7 is a VLM with a text_config sub-struct and a DecoderLayer
+        # in mlx_vlm.models.step3p7.language — same shape as glm5_next.
+        from mlx_vlm.models.step3p7.config import TextConfig
+        from mlx_vlm.models.step3p7.language import DecoderLayer
+        return TextConfig.from_dict(config["text_config"]), DecoderLayer
+    if _stream_source_model_type(config) == "jamba":
+        # Jamba has a flat ModelConfig (no text_config sub-struct) and a
+        # JambaDecoderLayer — same flint-shape return.
+        from mlx_vlm.models.jamba.config import ModelConfig
+        from mlx_vlm.models.jamba.language import JambaDecoderLayer
+        return ModelConfig.from_dict(config), JambaDecoderLayer
     if _stream_source_model_type(config) == "qwen4_exp":
         from mlx_vlm.models.qwen4_exp.config import TextConfig
         from mlx_vlm.models.qwen4_exp.language import Qwen4ExpDecoderLayer
@@ -10618,7 +10655,7 @@ def _streamed_layer_items(dp: "_DiscoveredPlan", layer_idx: int, skip_key=None) 
     self-sources — popping them first and discarding after would read the
     whole table every round and spike process memory by the table's size.
     """
-    prefix = f"{_STREAM_TEXT_LAYER_PREFIX}{layer_idx}."
+    prefix = f"{_streamed_text_namespace(dp)}layers.{layer_idx}."
     keys = sorted(k for k in dp if k.startswith(prefix))
     if not keys:
         raise KeyError(f"no checkpoint tensors for text layer {layer_idx}")
@@ -10701,7 +10738,12 @@ def _iter_streamed_layer_blocks(
         items = _streamed_layer_items(dp, layer_idx, skip_key=skip_key)
         if _is_muse_spark(config):
             items = muse_spark_layout.calibration_items(items, layer_idx, config)
-        block = layer_cls(args, layer_idx)
+        _block_args = (
+            (args, args.layers_block_type[layer_idx], layer_idx)
+            if _stream_source_model_type(config) == "jamba"
+            else (args, layer_idx)
+        )
+        block = layer_cls(*_block_args)
         # Freshly constructed modules default to training mode; loaded models
         # run in eval mode. Layer implementations may branch on the flag
         # (Qwen3.5-family GDN picks its fused kernel with
@@ -10731,7 +10773,7 @@ def _iter_streamed_layer_blocks(
 def _streamed_embed_weight(source, config: dict):
     """Source the token embedding table (bf16 on disk)."""
     dp = _streamed_source_plan(source, config)
-    weight = dp.pop(_STREAM_EMBED_KEY)
+    weight = dp.pop(_streamed_embed_key(dp))
     mx.eval(weight)
     return weight
 
@@ -11476,6 +11518,8 @@ def _collect_imatrix_streaming(
         _format_size(int(batch_plan["capture_budget_bytes"])),
     )
 
+    dp = _streamed_source_plan(source, config)
+
     while processed_samples < max_samples:
         round_start = processed_samples
         round_stop = min(round_start + step_samples, max_samples)
@@ -11500,7 +11544,7 @@ def _collect_imatrix_streaming(
         for layer_idx, block, _is_moe in _iter_streamed_layer_blocks(
             source, config, trust_remote_code=trust_remote_code
         ):
-            prefix = f"{_STREAM_TEXT_LAYER_PREFIX}{layer_idx}."
+            prefix = f"{_streamed_text_namespace(dp)}layers.{layer_idx}."
             layer_installed = collector.install(block, name_prefix=prefix)
             if round_index == 0:
                 installed += layer_installed
