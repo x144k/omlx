@@ -2626,7 +2626,7 @@
                             <div class="flex items-center justify-between gap-3">
                                 <label class="text-xs font-medium" style="color: var(--text-primary);"
                                     for="max-tool-rounds" x-text="window.t('chat.max_tool_rounds')"></label>
-                                <input id="max-tool-rounds" type="number" min="1" max="100" step="1"
+                                <input id="max-tool-rounds" type="number" min="1" max="1000" step="1"
                                     x-model.number="chatSettings.maxToolRounds"
                                     @change="chatSettings.maxToolRounds = normalizeMaxToolRounds(chatSettings.maxToolRounds); saveChatSettings()"
                                     class="w-20 px-2 py-1.5 text-xs text-right border border-line rounded-lg focus:outline-none focus:border-line-strong bg-surface"
@@ -7975,7 +7975,7 @@
 
     normalizeMaxToolRounds(value) {
         const parsed = Number.parseInt(value, 10);
-        return Number.isFinite(parsed) ? Math.min(100, Math.max(1, parsed)) : 10;
+        return Number.isFinite(parsed) ? Math.min(1000, Math.max(1, parsed)) : 10;
     },
 
     saveChatSettings() {
