@@ -2868,7 +2868,7 @@
                         ...d,
                         ...saved,
                         maxToolRounds: Number.isFinite(parsedMaxToolRounds)
-                            ? Math.min(100, Math.max(1, parsedMaxToolRounds))
+                            ? Math.min(1000, Math.max(1, parsedMaxToolRounds))
                             : d.maxToolRounds,
                     };
                 } catch {
