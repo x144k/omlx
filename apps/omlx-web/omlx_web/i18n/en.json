@@ -2054,7 +2054,7 @@
   "chat.show_jump_button": "Show \"jump to latest\" button",
   "chat.scroll_behavior_hint": "Auto-scroll follows new tokens while you're at the bottom. Scroll up to pause it; return to the bottom to resume.",
   "chat.max_tool_rounds": "Max Tool Rounds",
-  "chat.max_tool_rounds_hint": "Maximum consecutive tool-call rounds per response (1-100).",
+  "chat.max_tool_rounds_hint": "Maximum consecutive tool-call rounds per response (1-1000).",
   "chat.tool_images_note": "[{count} image(s) returned by the tool and shown to the user]",
   "chat.tool_binary_note": "[{count} binary attachment(s) returned by the tool]",
   "chat.tool_images_stripped": "{count} image(s) not kept in chat history",
