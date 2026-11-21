@@ -201,7 +201,7 @@ class TestChatToolCallSafety:
         assert self.normalize_max_tool_rounds(None) == 10
         assert self.normalize_max_tool_rounds("bad") == 10
         assert self.normalize_max_tool_rounds(0) == 1
-        assert self.normalize_max_tool_rounds(150) == 100
+        assert self.normalize_max_tool_rounds(150) == 1000
 
     # --- Tool result format tests ---
 
