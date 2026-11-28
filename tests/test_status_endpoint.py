@@ -288,3 +288,34 @@ class TestStatusCustomKernels:
         for name, report in status.items():
             assert report["available"] is False, name
             assert "simulated native import explosion" in report["import_error"]
+
+
+class TestModelStatusEndpoint:
+    """Tests for GET /v1/models/{model_id}/status."""
+
+    @pytest.fixture(autouse=True)
+    def setup_server_state(self):
+        state = ServerState()
+        with patch("omlx.server._server_state", state):
+            self._state = state
+            yield
+
+    def test_reports_resident_model_with_slash_in_id(self, client):
+        entry = MagicMock(spec=["is_loading", "engine", "estimated_size"])
+        entry.is_loading = False
+        entry.engine = MagicMock()
+        entry.estimated_size = 8 * 1024**3
+        pool = MagicMock(spec=["get_entry"])
+        pool.get_entry.return_value = entry
+        self._state.engine_pool = pool
+
+        resp = client.get("/v1/models/org/model-a/status")
+
+        assert resp.status_code == 200
+        assert resp.json() == {
+            "id": "org/model-a",
+            "resident": True,
+            "loading": False,
+            "estimated_size": 8 * 1024**3,
+        }
+        pool.get_entry.assert_called_once_with("org/model-a")

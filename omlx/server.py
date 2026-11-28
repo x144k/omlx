@@ -4067,6 +4067,22 @@ async def list_models_status(_: bool = Depends(verify_api_key)):
     return status
 
 
+@app.get("/v1/models/{model_id:path}/status")
+async def model_status(model_id: str, _: bool = Depends(verify_api_key)):
+    """Report whether one model is resident, without loading or unloading it."""
+    if _server_state.engine_pool is None:
+        raise HTTPException(status_code=503, detail="Server not initialized")
+    entry = _server_state.engine_pool.get_entry(model_id)
+    if entry is None:
+        raise HTTPException(status_code=404, detail=f"Model not found: {model_id}")
+    return {
+        "id": model_id,
+        "resident": entry.engine is not None and not entry.is_loading,
+        "loading": entry.is_loading,
+        "estimated_size": entry.estimated_size,
+    }
+
+
 @app.get("/v1/models/{model_id:path}", response_model=None)
 async def retrieve_model(
     model_id: str, _: bool = Depends(verify_inference_api_key)
