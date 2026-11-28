@@ -307,6 +307,17 @@ class TestServerMetrics:
         assert alltime["total_prompt_tokens"] == 100
         assert alltime["total_completion_tokens"] == 50
 
+    def test_context_reports_latest_chat_request(self):
+        metrics = ServerMetrics()
+        metrics.set_context("model-a", 90_000, 4_000)
+        metrics.set_context("model-b", 1_200)
+
+        assert metrics.get_context() == {
+            "model_id": "model-b",
+            "prompt_tokens": 1_200,
+            "completion_tokens": 0,
+        }
+
 
 class TestAlltimePersistence:
     """Tests for all-time stats persistence."""

@@ -7290,6 +7290,30 @@ def get_usage_history(
         raise HTTPException(status_code=503, detail="Usage history unavailable") from exc
 
 
+@router.get("/api/session/context")
+def get_session_context(is_admin: bool = Depends(require_admin)):
+    """Context size of the latest chat request against its model's limit."""
+    from ..server import get_max_context_window
+    from ..server_metrics import get_server_metrics
+
+    metrics = get_server_metrics()
+    session = metrics.get_snapshot(scope="session")
+    context = metrics.get_context()
+    model_id = context["model_id"] or None
+    current = context["prompt_tokens"] + context["completion_tokens"]
+    ceiling = get_max_context_window(model_id) or 0
+    return {
+        "prompt_tokens": session["total_prompt_tokens"],
+        "completion_tokens": session["total_completion_tokens"],
+        "total_tokens": session["total_prompt_tokens"]
+        + session["total_completion_tokens"],
+        "current_total_tokens": current,
+        "context_ceiling": ceiling,
+        "pct_of_ceiling": round(100.0 * current / ceiling, 2) if ceiling else 0.0,
+        "model_id": model_id,
+    }
+
+
 @router.get("/api/stats")
 async def get_server_stats(
     model: str = "",

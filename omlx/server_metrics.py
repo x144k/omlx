@@ -51,6 +51,11 @@ class ServerMetrics:
         self.total_generation_duration: float = 0.0
         self._per_model: Dict[str, Dict[str, Any]] = {}
 
+        # Latest chat request, for the context gauge.
+        self._context_model: str = ""
+        self._context_prompt_tokens: int = 0
+        self._context_completion_tokens: int = 0
+
         # Preflight rejections — split by reason so operators can tell
         # "user fed an oversize prompt" (hard_limit) apart from "system
         # under memory pressure, admission paused" (admission_paused).
@@ -353,6 +358,27 @@ class ServerMetrics:
             self.total_prefill_duration = 0.0
             self.total_generation_duration = 0.0
             self._per_model.clear()
+            self._context_model = ""
+            self._context_prompt_tokens = 0
+            self._context_completion_tokens = 0
+
+    def set_context(
+        self, model_id: str, prompt_tokens: int, completion_tokens: int = 0
+    ) -> None:
+        """Record the context size of the latest chat request. Thread-safe."""
+        with self._lock:
+            self._context_model = model_id
+            self._context_prompt_tokens = prompt_tokens
+            self._context_completion_tokens = completion_tokens
+
+    def get_context(self) -> dict[str, Any]:
+        """Model and token counts of the latest chat request. Thread-safe."""
+        with self._lock:
+            return {
+                "model_id": self._context_model,
+                "prompt_tokens": self._context_prompt_tokens,
+                "completion_tokens": self._context_completion_tokens,
+            }
 
     def clear_alltime_metrics(self) -> None:
         """Clear all-time metrics and delete the persisted file. Thread-safe."""

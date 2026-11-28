@@ -5274,6 +5274,7 @@ async def create_chat_completion(
                 raise HTTPException(status_code=400, detail=f"Chat template error: {e}")
             raise
         validate_context_window(num_prompt_tokens, request.model)
+        get_server_metrics().set_context(resolved_model, num_prompt_tokens)
 
         # Prepare kwargs
         (
@@ -5488,6 +5489,9 @@ async def create_chat_completion(
                 generation_duration=metric_gen_duration,
                 model_id=resolved_model,
                 request_duration=elapsed,
+            )
+            get_server_metrics().set_context(
+                resolved_model, output.prompt_tokens, output.completion_tokens
             )
 
             # Separate thinking from content
@@ -7364,6 +7368,11 @@ async def stream_chat_completion(
             model_id=resolved_model or request.model,
             request_duration=total_duration,
         )
+        get_server_metrics().set_context(
+            resolved_model or request.model,
+            last_output.prompt_tokens,
+            last_output.completion_tokens,
+        )
         speed_duration = total_duration if is_diffusion else gen_duration
         tokens_per_sec = (
             last_output.completion_tokens / speed_duration if speed_duration > 0 else 0
@@ -7891,6 +7900,9 @@ async def stream_anthropic_messages(
             model_id=serving_model,
             request_duration=total_duration,
         )
+        get_server_metrics().set_context(
+            serving_model, last_output.prompt_tokens, last_output.completion_tokens
+        )
         tokens_per_sec = (
             last_output.completion_tokens / total_duration if total_duration > 0 else 0
         )
@@ -8230,6 +8242,7 @@ async def create_anthropic_message(
             engine, _count_anthropic_prompt, prompt
         )
         validate_context_window(num_prompt_tokens, request.model)
+        get_server_metrics().set_context(resolved_model, num_prompt_tokens)
 
         if prepared_prompt is not None:
             chat_kwargs["_prepared_prompt"] = prepared_prompt
@@ -8311,6 +8324,9 @@ async def create_anthropic_message(
                 generation_duration=gen_duration,
                 model_id=resolved_model,
                 request_duration=elapsed,
+            )
+            get_server_metrics().set_context(
+                resolved_model, output.prompt_tokens, output.completion_tokens
             )
 
             # Separate thinking from content
