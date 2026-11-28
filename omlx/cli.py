@@ -17,6 +17,7 @@ Usage:
 import argparse
 import errno
 import faulthandler
+import json
 import math
 import socket
 import sys
@@ -481,6 +482,15 @@ def serve_command(args):
             sock.close()
 
 
+def _connect_host(host: str) -> str:
+    """Address that reaches a server bound to ``host``."""
+    # host may be a comma-separated list of bind addresses; pick the first one
+    # for connecting. Wildcard addresses (0.0.0.0, ::) are valid bind targets
+    # but not connectable — fall back to localhost in that case.
+    first_bind = [h.strip() for h in host.split(",") if h.strip()][0] if host else ""
+    return first_bind if first_bind not in ("", "0.0.0.0", "::") else "127.0.0.1"
+
+
 def launch_command(args, extra_args: list[str] | None = None):
     """Launch an external tool integrated with oMLX.
 
@@ -516,13 +526,7 @@ def launch_command(args, extra_args: list[str] | None = None):
     host = args.host or settings.server.host
     port = args.port or settings.server.port
 
-    # host may be a comma-separated list of bind addresses; pick the first one
-    # for connecting. Wildcard addresses (0.0.0.0, ::) are valid bind targets
-    # but not connectable — fall back to localhost in that case.
-    first_bind = [h.strip() for h in host.split(",") if h.strip()][0] if host else ""
-    connect_host = (
-        first_bind if first_bind not in ("", "0.0.0.0", "::") else "127.0.0.1"
-    )
+    connect_host = _connect_host(host)
     base_url = f"http://{bracket_host(connect_host)}:{port}"
 
     # Claude Desktop resolves tier aliases server-side, so it needs no
@@ -862,6 +866,31 @@ def lifecycle_command(args) -> int:
     return 1
 
 
+def mcp_reload_command(args) -> int:
+    """Reload the running server's MCP config without restarting it."""
+    import requests
+
+    from .integrations.base import bracket_host
+    from .settings import GlobalSettings
+
+    settings = GlobalSettings.load()
+    host = bracket_host(_connect_host(settings.server.host))
+    url = f"http://{host}:{settings.server.port}/admin/api/mcp/reload"
+    headers = {}
+    if settings.auth.api_key:
+        headers["Authorization"] = f"Bearer {settings.auth.api_key}"
+    try:
+        resp = requests.post(url, headers=headers, timeout=30)
+    except requests.RequestException as e:
+        print(f"omlx mcp reload failed: {e}", file=sys.stderr)
+        return 1
+    if not resp.ok:
+        print(f"omlx mcp reload failed: {resp.status_code} {resp.text}", file=sys.stderr)
+        return 1
+    print(json.dumps(resp.json(), indent=2))
+    return 0
+
+
 def diagnose_menubar() -> int:
     """Diagnose why the oMLX menubar icon might be missing.
 
@@ -1173,6 +1202,25 @@ Examples:
                 action="store_true",
                 help="Return after sending the request without waiting for server health",
             )
+
+    mcp_parser = subparsers.add_parser(
+        "mcp",
+        help="Manage MCP servers on the running server",
+        description="Manage MCP server connections on the running oMLX server.",
+    )
+    mcp_subparsers = mcp_parser.add_subparsers(
+        dest="mcp_action",
+        required=True,
+        help="MCP command",
+    )
+    mcp_subparsers.add_parser(
+        "reload",
+        help="Reload the MCP config without restarting the server",
+        description=(
+            "Re-read the MCP config and reconnect every MCP server. Loaded "
+            "models and the inference session are not touched."
+        ),
+    )
 
     # Serve command (multi-model)
     serve_parser = subparsers.add_parser(
@@ -1652,6 +1700,8 @@ Example directory structure:
             sys.exit(diagnose_command(args))
         elif args.command == "cluster":
             sys.exit(cluster_command(args))
+        elif args.command == "mcp":
+            sys.exit(mcp_reload_command(args))
         else:
             parser.print_help()
             sys.exit(1)

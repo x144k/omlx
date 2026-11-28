@@ -9,6 +9,7 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from .client import MCPClient
+from .config import load_mcp_config
 from .tools import merge_tools, mcp_tools_to_openai, openai_call_to_mcp
 from .types import (
     MCPConfig,
@@ -298,3 +299,22 @@ class MCPClientManager:
             for client in self._clients.values():
                 await client.disconnect()
                 await client.connect()
+
+    async def reload_config(self) -> dict[str, Any]:
+        """Re-read the MCP config and reconnect every server.
+
+        Only the MCP server connections restart. Loaded models and the
+        inference session are not touched.
+        """
+        config = load_mcp_config()
+        await self.stop()
+        self.config = config
+        self._clients = {
+            name: MCPClient(server_config)
+            for name, server_config in config.servers.items()
+        }
+        await self.start()
+        return {
+            "servers": list(self._clients),
+            "connected": sum(1 for c in self._clients.values() if c.is_connected),
+        }

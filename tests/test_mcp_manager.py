@@ -537,6 +537,32 @@ class TestMCPClientManagerRefreshReconnect:
         for client in manager._clients.values():
             client.disconnect.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_reload_config_replaces_servers(self, manager: MCPClientManager):
+        manager._started = True
+        old_clients = list(manager._clients.values())
+        new_config = MCPConfig.from_dict({
+            "servers": {
+                "server2": {"transport": "stdio", "command": "node"},
+                "server3": {"transport": "stdio", "command": "uvx"},
+            }
+        })
+
+        async def connect(client):
+            client._state = MCPServerState.CONNECTED
+            return True
+
+        with (
+            patch("omlx.mcp.manager.load_mcp_config", return_value=new_config),
+            patch.object(MCPClient, "connect", autospec=True, side_effect=connect),
+        ):
+            result = await manager.reload_config()
+
+        for client in old_clients:
+            client.disconnect.assert_called_once()
+        assert result == {"servers": ["server2", "server3"], "connected": 2}
+        assert manager.config is new_config
+
 
 class TestInitMCPGracefulFallback:
     """Tests for init_mcp() graceful fallback on config errors (issue #474)."""

@@ -7314,6 +7314,21 @@ def get_session_context(is_admin: bool = Depends(require_admin)):
     }
 
 
+@router.post("/api/mcp/reload")
+async def reload_mcp_servers(is_admin: bool = Depends(require_admin)):
+    """Reload the MCP config without restarting the server."""
+    from ..server import get_mcp_manager
+
+    manager = get_mcp_manager()
+    if manager is None:
+        raise HTTPException(status_code=503, detail="MCP is not configured")
+    try:
+        result = await manager.reload_config()
+    except (ValueError, OSError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid MCP config: {e}") from e
+    return {"status": "ok", **result}
+
+
 @router.get("/api/stats")
 async def get_server_stats(
     model: str = "",
