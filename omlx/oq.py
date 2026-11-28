@@ -10572,8 +10572,29 @@ def _collect_imatrix_from_model(
 # joins _STREAM_CALIBRATION_SUPPORTED_MODEL_TYPES so the calibration
 # decision starts routing it through the streamed path.
 
-_STREAM_TEXT_LAYER_PREFIX = "language_model.model.layers."
 _STREAM_EMBED_KEY = "language_model.model.embed_tokens.weight"
+# mlx-vlm sanitizes text tensors under language_model.model.; mlx-lm text
+# checkpoints, such as Jamba, under model.
+_STREAM_TEXT_NAMESPACES = ("language_model.model.", "model.")
+
+
+def _streamed_layer_prefix(dp: "_DiscoveredPlan", layer_idx: int) -> str:
+    """Checkpoint key prefix of one text layer."""
+    for namespace in _STREAM_TEXT_NAMESPACES:
+        prefix = f"{namespace}layers.{layer_idx}."
+        if any(k.startswith(prefix) for k in dp):
+            return prefix
+    raise KeyError(f"no checkpoint tensors for text layer {layer_idx}")
+
+
+def _streamed_embed_key(dp: "_DiscoveredPlan") -> str:
+    """Checkpoint key of the token embedding table."""
+    for namespace in _STREAM_TEXT_NAMESPACES:
+        key = f"{namespace}embed_tokens.weight"
+        if key in dp:
+            return key
+    raise KeyError("no token embedding table in the streamed checkpoint plan")
+
 
 # Qwen3.5 / 3.6 and their text-only Hugging Face names.
 _QWEN3_5_STREAM_MODEL_TYPES = frozenset(
@@ -10585,7 +10606,15 @@ _QWEN3_5_STREAM_MODEL_TYPES = frozenset(
 # and an explicit stream_calibration request for one fails fast (see
 # _resolve_stream_calibration). Keep this in lockstep with the sourcer above.
 _STREAM_CALIBRATION_SUPPORTED_MODEL_TYPES = frozenset(
-    {"minimax_m3_vl", "qwen4_exp", "glm5_next", "muse_spark", "flint"}
+    {
+        "minimax_m3_vl",
+        "qwen4_exp",
+        "glm5_next",
+        "muse_spark",
+        "flint",
+        "step3p7",
+        "jamba",
+    }
     | _QWEN3_5_STREAM_MODEL_TYPES
     | set(_HY_V4_MODEL_TYPES)
 )
@@ -10621,6 +10650,16 @@ def _streamed_text_args(model_path, config, *, trust_remote_code: bool = False):
         from omlx.patches.hy_v4.language import DecoderLayer
 
         return ModelConfig.from_dict(config).text_config, DecoderLayer
+    if _stream_source_model_type(config) == "step3p7":
+        from mlx_vlm.models.step3p7.config import TextConfig
+        from mlx_vlm.models.step3p7.language import DecoderLayer
+
+        return TextConfig.from_dict(config["text_config"]), DecoderLayer
+    if _stream_source_model_type(config) == "jamba":
+        from mlx_vlm.models.jamba.config import ModelConfig
+        from mlx_vlm.models.jamba.language import JambaDecoderLayer
+
+        return ModelConfig.from_dict(config), JambaDecoderLayer
     if _stream_source_model_type(config) == "qwen4_exp":
         from mlx_vlm.models.qwen4_exp.config import TextConfig
         from mlx_vlm.models.qwen4_exp.language import Qwen4ExpDecoderLayer
@@ -10676,7 +10715,7 @@ def _streamed_layer_items(dp: "_DiscoveredPlan", layer_idx: int, skip_key=None) 
     self-sources — popping them first and discarding after would read the
     whole table every round and spike process memory by the table's size.
     """
-    prefix = f"{_STREAM_TEXT_LAYER_PREFIX}{layer_idx}."
+    prefix = _streamed_layer_prefix(dp, layer_idx)
     keys = sorted(k for k in dp if k.startswith(prefix))
     if not keys:
         raise KeyError(f"no checkpoint tensors for text layer {layer_idx}")
@@ -10733,7 +10772,9 @@ def _load_streamed_block_weights(block, items, layer_idx: int) -> str:
 def _iter_streamed_layer_blocks(
     source, config: dict, *, trust_remote_code: bool = False
 ):
-    """Yield (layer_idx, block, is_moe) with each text layer fully resident.
+    """Yield (layer_idx, prefix, block, is_moe) with each text layer resident.
+
+    ``prefix`` is the layer's checkpoint key prefix.
 
     Each layer gets its own bare decoder block (attention wiring is
     layer-index dependent, so one instance cannot be reused across the
@@ -10756,10 +10797,14 @@ def _iter_streamed_layer_blocks(
         else None
     )
     for layer_idx in range(args.num_hidden_layers):
+        prefix = _streamed_layer_prefix(dp, layer_idx)
         items = _streamed_layer_items(dp, layer_idx, skip_key=skip_key)
         if _is_muse_spark(config):
             items = muse_spark_layout.calibration_items(items, layer_idx, config)
-        block = layer_cls(args, layer_idx)
+        if _stream_source_model_type(config) == "jamba":
+            block = layer_cls(args, args.layers_block_type[layer_idx], layer_idx)
+        else:
+            block = layer_cls(args, layer_idx)
         # Freshly constructed modules default to training mode; loaded models
         # run in eval mode. Layer implementations may branch on the flag
         # (Qwen3.5-family GDN picks its fused kernel with
@@ -10781,7 +10826,7 @@ def _iter_streamed_layer_blocks(
         logger.debug(
             "streamed layer %d sourced (%s load, moe=%s)", layer_idx, mode, is_moe
         )
-        yield layer_idx, block, is_moe
+        yield layer_idx, prefix, block, is_moe
         del block  # delete-L before load-L+1: never two layers resident here
         mx.clear_cache()
 
@@ -10789,7 +10834,7 @@ def _iter_streamed_layer_blocks(
 def _streamed_embed_weight(source, config: dict):
     """Source the token embedding table (bf16 on disk)."""
     dp = _streamed_source_plan(source, config)
-    weight = dp.pop(_STREAM_EMBED_KEY)
+    weight = dp.pop(_streamed_embed_key(dp))
     mx.eval(weight)
     return weight
 
@@ -11555,10 +11600,9 @@ def _collect_imatrix_streaming(
             slot_states = None
 
         first_streamed_layer = round_index == 0
-        for layer_idx, block, _is_moe in _iter_streamed_layer_blocks(
+        for layer_idx, prefix, block, _is_moe in _iter_streamed_layer_blocks(
             source, config, trust_remote_code=trust_remote_code
         ):
-            prefix = f"{_STREAM_TEXT_LAYER_PREFIX}{layer_idx}."
             layer_installed = collector.install(block, name_prefix=prefix)
             if round_index == 0:
                 installed += layer_installed
@@ -12268,7 +12312,7 @@ def _refine_oqe_streamed(source, config, writer, stats, *, trust_remote_code, pr
         slot_states = [_hy_v4_slot_state(hy_state, lo, hi) for lo, hi in ranges]
     text_config = config.get("text_config") or config
     total_layers = int(text_config.get("num_hidden_layers") or 0)
-    for layer_idx, block, _is_moe in _iter_streamed_layer_blocks(
+    for layer_idx, prefix, block, _is_moe in _iter_streamed_layer_blocks(
         source, config, trust_remote_code=trust_remote_code
     ):
         if is_qwen4_exp:
@@ -12305,7 +12349,7 @@ def _refine_oqe_streamed(source, config, writer, stats, *, trust_remote_code, pr
 
         _refine_slots(
             block,
-            f"{_STREAM_TEXT_LAYER_PREFIX}{layer_idx}.",
+            prefix,
             layer_idx,
             run_slots,
             writer,
@@ -13101,7 +13145,7 @@ def _measure_sensitivity_streaming(
     if state is None:
         return {}
 
-    for layer_idx, block, _is_moe in _iter_streamed_layer_blocks(
+    for layer_idx, _prefix, block, _is_moe in _iter_streamed_layer_blocks(
         source, config, trust_remote_code=trust_remote_code
     ):
         _streamed_sensitivity_layer(state, layer_idx, block, config, oq_level)

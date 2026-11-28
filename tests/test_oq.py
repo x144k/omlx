@@ -9327,6 +9327,18 @@ class TestStreamedCalibration:
         items = oq._streamed_layer_items(plan, 1, skip_key=oq._qwen4_exp_mmap_skip_key)
         assert [key for key, _ in items] == ["self_attn.q_proj.weight"]
 
+    def test_mlx_lm_text_layout_is_sourced_under_model_namespace(self):
+        import omlx.oq as oq
+
+        plan = {
+            "model.embed_tokens.weight": "embed",
+            "model.layers.0.mamba.in_proj.weight": "in_proj",
+        }
+
+        assert oq._streamed_embed_key(plan) == "model.embed_tokens.weight"
+        assert oq._streamed_layer_prefix(plan, 0) == "model.layers.0."
+        assert oq._streamed_layer_items(plan, 0) == [("mamba.in_proj.weight", "in_proj")]
+
     @pytest.mark.parametrize("nvfp4", [False, True])
     def test_muse_spark_collection_matches_resident(self, tmp_path, monkeypatch, nvfp4):
         """Streamed layers of the HF checkpoint match mlx-lm's loaded model.
