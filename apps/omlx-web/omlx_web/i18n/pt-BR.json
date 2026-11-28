@@ -2066,7 +2066,7 @@
   "chat.show_jump_button": "Mostrar o botão \"Ir para o mais recente\"",
   "chat.scroll_behavior_hint": "A rolagem automática acompanha os novos tokens enquanto você está no final. Role para cima para pausar; volte ao final para retomar.",
   "chat.max_tool_rounds": "Max Tool Rounds",
-  "chat.max_tool_rounds_hint": "Maximum consecutive tool-call rounds per response (1-100).",
+  "chat.max_tool_rounds_hint": "Maximum consecutive tool-call rounds per response (1-1000).",
   "chat.tool_images_note": "[A ferramenta retornou {count} imagem(ns), exibida(s) ao usuário]",
   "chat.tool_binary_note": "[A ferramenta retornou {count} anexo(s) binário(s)]",
   "chat.tool_images_stripped": "{count} imagem(ns) não mantida(s) no histórico de chat",

@@ -153,7 +153,7 @@ class TestChatToolCallSafety:
             parsed = int(value)
         except (TypeError, ValueError):
             return 10
-        return min(100, max(1, parsed))
+        return min(1000, max(1, parsed))
 
     @staticmethod
     def should_execute_tool_round(completed_rounds, max_rounds):
@@ -201,7 +201,8 @@ class TestChatToolCallSafety:
         assert self.normalize_max_tool_rounds(None) == 10
         assert self.normalize_max_tool_rounds("bad") == 10
         assert self.normalize_max_tool_rounds(0) == 1
-        assert self.normalize_max_tool_rounds(150) == 100
+        assert self.normalize_max_tool_rounds(150) == 150
+        assert self.normalize_max_tool_rounds(1500) == 1000
 
     # --- Tool result format tests ---
 
@@ -328,7 +329,7 @@ class TestChatToolRoundSourceContract:
 
         assert "maxToolRounds: 10" in source
         assert 'id="max-tool-rounds"' in source
-        assert 'min="1" max="100"' in source
+        assert 'min="1" max="1000"' in source
         assert "normalizeMaxToolRounds(value)" in source
 
 

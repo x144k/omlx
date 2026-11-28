@@ -2066,7 +2066,7 @@
   "chat.show_jump_button": "Mostra il pulsante \"Vai ai messaggi recenti\"",
   "chat.scroll_behavior_hint": "Lo scorrimento automatico segue i nuovi token finché resti in fondo. Scorri verso l'alto per sospenderlo; torna in fondo per riprenderlo.",
   "chat.max_tool_rounds": "Max cicli di tool",
-  "chat.max_tool_rounds_hint": "Numero massimo di cicli consecutivi di chiamate ai tool per risposta (1-100).",
+  "chat.max_tool_rounds_hint": "Numero massimo di cicli consecutivi di chiamate ai tool per risposta (1-1000).",
   "chat.tool_images_note": "[{count} immagine/i restituite dallo strumento e mostrate all'utente]",
   "chat.tool_binary_note": "[{count} allegato/i binari restituiti dallo strumento]",
   "chat.tool_images_stripped": "{count} immagine/i non conservate nella cronologia della chat",

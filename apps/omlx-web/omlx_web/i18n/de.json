@@ -2066,7 +2066,7 @@
   "chat.show_jump_button": "Schaltfläche „Zur neuesten Nachricht springen“ anzeigen",
   "chat.scroll_behavior_hint": "Am unteren Ende folgt die Ansicht neuen Token automatisch. Scrollen Sie nach oben, um dies zu pausieren, und kehren Sie zum unteren Ende zurück, um es fortzusetzen.",
   "chat.max_tool_rounds": "Maximale Werkzeugrunden",
-  "chat.max_tool_rounds_hint": "Maximale Anzahl aufeinanderfolgender Werkzeugaufruf-Runden pro Antwort (1–100).",
+  "chat.max_tool_rounds_hint": "Maximale Anzahl aufeinanderfolgender Werkzeugaufruf-Runden pro Antwort (1–1000).",
   "chat.tool_images_note": "[{count} Bild(er) vom Werkzeug zurückgegeben und dem Nutzer angezeigt]",
   "chat.tool_binary_note": "[{count} Binäranhang/-anhänge vom Werkzeug zurückgegeben]",
   "chat.tool_images_stripped": "{count} Bild(er) nicht im Chat-Verlauf behalten",
